@@ -7,8 +7,13 @@ const schema = readFileSync(new URL("../src/schema.sql", import.meta.url), "utf8
 function testDatabase(): Database { const mem = newDb(); mem.public.none(schema); const adapter = mem.adapters.createPg(); const pool = new adapter.Pool(); return { async query(sql, params = []) { return (await pool.query(sql, params)).rows; }, async close() { await pool.end(); } }; }
 
 describe("assessment platform", () => {
-  let app: ReturnType<typeof buildApp>; const headers = { "x-api-key": "test-key" };
-  beforeEach(() => { app = buildApp(testDatabase(), "test-key"); });
+  let app: ReturnType<typeof buildApp>;
+  let db: Database;
+  const headers = { "x-api-key": "test-key" };
+  beforeEach(() => {
+    db = testDatabase();
+    app = buildApp(db, "test-key");
+  });
   async function setup() {
     const c = await app.inject({ method: "POST", url: "/classes", headers, payload: { code: "C1", name: "Year 10", teacher: "Ms Smith" } });
     const s = await app.inject({ method: "POST", url: "/students", headers, payload: { code: "S1", name: "Aroha", class_id: c.json().id } });
@@ -98,5 +103,39 @@ describe("assessment platform", () => {
     const s = await submission();
     const r = await app.inject({ method: "GET", url: `/submissions/${s.id}/activities`, headers });
     expect(r.json().activities[0].action).toBe("submitted");
+  });
+  it("reports healthy diagnostics on valid state", async () => {
+    await submission();
+    const r = await app.inject({ method: "GET", url: "/admin/diagnostics/integrity", headers });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().healthy).toBe(true);
+    expect(r.json().anomalies_count).toBe(0);
+  });
+  it("detects score out-of-bounds anomalies in diagnostics", async () => {
+    const s = await submission();
+    await db.query("UPDATE submissions SET raw_score=150 WHERE id=$1", [s.id]);
+    const r = await app.inject({ method: "GET", url: "/admin/diagnostics/integrity", headers });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().healthy).toBe(false);
+    expect(r.json().anomalies_count).toBeGreaterThan(0);
+    expect(r.json().issues[0].type).toBe("score_out_of_bounds");
+  });
+  it("reconciles anomalous submission and records structured audit trail", async () => {
+    const s = await submission();
+    await db.query("UPDATE submissions SET raw_score=150, moderated_score=200 WHERE id=$1", [s.id]);
+    const r = await app.inject({
+      method: "POST",
+      url: `/admin/reconcile/${s.id}`,
+      headers,
+      payload: { actor: "SupportEng", reason: "INC-402: Score overflow clamp to total marks" }
+    });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().mutated).toBe(true);
+    expect(r.json().raw_score).toBe(100);
+    expect(r.json().moderated_score).toBe(100);
+    const act = await app.inject({ method: "GET", url: `/submissions/${s.id}/activities`, headers });
+    const reconciledAct = act.json().activities.find((a: any) => a.action === "reconciled");
+    expect(reconciledAct).toBeDefined();
+    expect(reconciledAct.actor).toBe("SupportEng");
   });
 });

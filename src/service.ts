@@ -84,4 +84,118 @@ export class AssessmentService {
     if (!(await this.db.query("SELECT id FROM submissions WHERE id=$1", [submissionId])).length) throw new NotFoundError("submission not found");
     return this.db.query("SELECT action, actor, detail, at FROM activities WHERE submission_id=$1 ORDER BY id", [submissionId]);
   }
+  async auditIntegrity() {
+    const scoreAnomalies = await this.db.query<{
+      id: number;
+      assessment_id: number;
+      raw_score: number | null;
+      moderated_score: number | null;
+      total_marks: number;
+    }>(
+      `SELECT s.id, s.assessment_id, s.raw_score, s.moderated_score, a.total_marks 
+       FROM submissions s 
+       JOIN assessments a ON s.assessment_id = a.id 
+       WHERE (s.raw_score IS NOT NULL AND s.raw_score > a.total_marks)
+          OR (s.moderated_score IS NOT NULL AND (s.moderated_score > a.total_marks OR s.moderated_score < 0))`
+    );
+
+    const invalidState = await this.db.query<{
+      id: number;
+      status: string;
+      raw_score: number | null;
+      moderated_score: number | null;
+    }>(
+      `SELECT id, status, raw_score, moderated_score 
+       FROM submissions 
+       WHERE (status = 'released' AND moderated_score IS NULL)
+          OR (status = 'moderated' AND raw_score IS NULL)`
+    );
+
+    const issues: Array<{ submission_id: number; type: string; detail: string }> = [];
+
+    for (const row of scoreAnomalies) {
+      issues.push({
+        submission_id: row.id,
+        type: "score_out_of_bounds",
+        detail: `Submission ${row.id} has score exceeding total marks (${row.total_marks}): raw=${row.raw_score}, moderated=${row.moderated_score}`,
+      });
+    }
+
+    for (const row of invalidState) {
+      issues.push({
+        submission_id: row.id,
+        type: "invalid_state_transition",
+        detail: `Submission ${row.id} in status '${row.status}' lacks mandatory score prerequisites (raw=${row.raw_score}, moderated=${row.moderated_score})`,
+      });
+    }
+
+    return {
+      healthy: issues.length === 0,
+      anomalies_count: issues.length,
+      issues,
+      checked_at: new Date().toISOString(),
+    };
+  }
+  async reconcileSubmission(submissionId: number, actor: string, reason: string) {
+    if (!actor.trim() || !reason.trim()) {
+      throw new ValidationError("actor and reconciliation reason are required");
+    }
+
+    const rows = await this.db.query<{
+      id: number;
+      assessment_id: number;
+      status: string;
+      raw_score: number | null;
+      moderated_score: number | null;
+    }>(
+      "SELECT id, assessment_id, status, raw_score, moderated_score FROM submissions WHERE id=$1",
+      [submissionId]
+    );
+
+    if (!rows.length) throw new NotFoundError("submission not found");
+    const sub = rows[0];
+
+    const assessment = await this.db.query<{ total_marks: number }>(
+      "SELECT total_marks FROM assessments WHERE id=$1",
+      [sub.assessment_id]
+    );
+
+    const total = assessment[0].total_marks;
+    let reconciledRaw = sub.raw_score;
+    let reconciledMod = sub.moderated_score;
+    let mutated = false;
+
+    if (reconciledRaw !== null && reconciledRaw > total) {
+      reconciledRaw = total;
+      mutated = true;
+    }
+    if (reconciledMod !== null && (reconciledMod > total || reconciledMod < 0)) {
+      reconciledMod = Math.max(0, Math.min(reconciledMod, total));
+      mutated = true;
+    }
+
+    if (mutated) {
+      await this.db.query(
+        "UPDATE submissions SET raw_score=$1, moderated_score=$2 WHERE id=$3",
+        [reconciledRaw, reconciledMod, submissionId]
+      );
+    }
+
+    await this.activity(
+      submissionId,
+      "reconciled",
+      actor,
+      `Reason: ${reason} (raw: ${sub.raw_score} -> ${reconciledRaw}, mod: ${sub.moderated_score} -> ${reconciledMod})`
+    );
+
+    return {
+      id: submissionId,
+      status: sub.status,
+      raw_score: reconciledRaw,
+      moderated_score: reconciledMod,
+      mutated,
+      reconciled_by: actor,
+      reason,
+    };
+  }
 }
