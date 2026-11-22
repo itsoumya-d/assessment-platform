@@ -9,6 +9,7 @@ const submitSchema = z.object({ assessment_id: z.number().int().positive(), stud
 const markSchema = z.object({ marker: z.string().min(1), score: z.number().int().min(0), feedback: z.string().min(1) });
 const moderateSchema = z.object({ moderator: z.string().min(1), score: z.number().int().min(0) });
 const actorSchema = z.object({ actor: z.string().min(1) });
+const reconcileSchema = z.object({ actor: z.string().min(1), reason: z.string().min(1) });
 export function buildApp(db: Database, apiKey: string): FastifyInstance {
   const app = Fastify({ logger: false }); const service = new AssessmentService(db);
   app.addHook("preHandler", async (request, reply) => { if (request.url === "/health") return; if (request.headers["x-api-key"] !== apiKey) reply.code(401).send({ error: "missing or invalid API key" }); });
@@ -23,5 +24,7 @@ export function buildApp(db: Database, apiKey: string): FastifyInstance {
   app.post("/submissions/:id/release", async (request, reply) => { try { const id = z.coerce.number().int().positive().parse((request.params as { id: string }).id); const b = actorSchema.parse(request.body); return await service.release(id, b.actor); } catch (e) { const r = handle(e); return reply.code(r.status).send(r.body); } });
   app.get("/submissions/:id/result", async (request, reply) => { try { const id = z.coerce.number().int().positive().parse((request.params as { id: string }).id); return await service.result(id); } catch (e) { const r = handle(e); return reply.code(r.status).send(r.body); } });
   app.get("/submissions/:id/activities", async (request, reply) => { try { const id = z.coerce.number().int().positive().parse((request.params as { id: string }).id); return { activities: await service.activities(id) }; } catch (e) { const r = handle(e); return reply.code(r.status).send(r.body); } });
+  app.get("/admin/diagnostics/integrity", async () => { return await service.auditIntegrity(); });
+  app.post("/admin/reconcile/:id", async (request, reply) => { try { const id = z.coerce.number().int().positive().parse((request.params as { id: string }).id); const b = reconcileSchema.parse(request.body); return await service.reconcileSubmission(id, b.actor, b.reason); } catch (e) { const r = handle(e); return reply.code(r.status).send(r.body); } });
   return app;
 }
