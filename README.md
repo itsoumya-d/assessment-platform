@@ -1,19 +1,21 @@
 # Assessment Platform
 
-Production-oriented school assessment backend: classes, students, assessments,
-submissions, marking, moderation, release and audit.
+Production-oriented assessment and workflow backend: classes, students, assessments,
+submissions, marking, moderation, configurable dynamic forms engine, and audit.
 
 ## Why this exists
 
-Assessment software is a chain of custody problem. A student submits once, a
-marker scores it, a moderator can adjust it, and the result cannot be released
-until moderation is complete. This service models that state machine explicitly.
+Assessment and clinical workflows are chain-of-custody and structured-data capture problems.
+A workflow participant submits structured observations once, reviewers score and moderate,
+and results transition through explicit state machines. Additionally, complex workflows
+require configurable, schema-driven forms with conditional rules and strict runtime validation.
 
 ## Stack
 
 - TypeScript, Node.js, Fastify
 - PostgreSQL (`pg`), SQL schema migration on boot
-- Zod validation
+- Zod schema validation
+- Configurable dynamic forms engine with conditional logic and range constraints
 - SHA-256 attachment evidence
 - Vitest + `pg-mem` integration tests
 - Multi-stage Dockerfile
@@ -23,6 +25,8 @@ until moderation is complete. This service models that state machine explicitly.
 
 - Classes with teachers, and students assigned to a class
 - Assessments with total marks, due date and open status
+- Configurable form schema registration (`POST /forms`, `GET /forms/:code`)
+- Dynamic form evaluation with conditional visibility and field constraint validation (`POST /forms/:code/validate`)
 - One submission per student/assessment, with attachment hash
 - Marking with score cap and feedback
 - Moderation after marking
@@ -47,6 +51,6 @@ npm run build
 
 ## Honest scope
 
-This is a real, tested assessment workflow, not a full LMS. It does not store
-files, run plagiarism checks, author question banks, integrate with SMS/LMS, or
-handle timetable/attendance. The README does not claim production usage.
+This is a real, tested assessment and workflow service. It does not store
+binary files on disk, run external plagiarism checks, or integrate directly with SMS/LMS.
+The README does not claim production usage.

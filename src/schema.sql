@@ -42,3 +42,12 @@ CREATE TABLE IF NOT EXISTS activities (
   detail TEXT NOT NULL DEFAULT '',
   at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS form_definitions (
+  id SERIAL PRIMARY KEY,
+  code TEXT UNIQUE NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  definition TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
